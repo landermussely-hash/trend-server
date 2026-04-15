@@ -1,0 +1,65 @@
+//@version=5
+indicator("Trend Dashboard AI [4H / 1H]", overlay=true)
+
+// ── Instellingen ──────────────────────────────────────────────
+server_url = input.string("https://JOUW-SERVER-URL.railway.app", "Server URL")
+candle_count = input.int(30, "Aantal candles meesturen", minval=10, maxval=50)
+
+// ── Bouw JSON string van de laatste N candles op een gegeven TF ──
+build_json(tf, n, symbol, timeframe_label) =>
+    // Haal OHLC arrays op van de doeltimeframe
+    o = request.security(syminfo.tickerid, tf, open,  lookahead=barmerge.lookahead_off)
+    h = request.security(syminfo.tickerid, tf, high,  lookahead=barmerge.lookahead_off)
+    l = request.security(syminfo.tickerid, tf, low,   lookahead=barmerge.lookahead_off)
+    c = request.security(syminfo.tickerid, tf, close, lookahead=barmerge.lookahead_off)
+
+    // Bouw candle array als JSON string (laatste n candles)
+    candles = ""
+    for i = n - 1 to 0
+        sep = i > 0 ? "," : ""
+        candles := candles + '{"open":' + str.tostring(o[i], "#.#####") + ',"high":' + str.tostring(h[i], "#.#####") + ',"low":' + str.tostring(l[i], "#.#####") + ',"close":' + str.tostring(c[i], "#.#####") + '}' + sep
+
+    '{"symbol":"' + symbol + '","timeframe":"' + timeframe_label + '","candles":[' + candles + ']}'
+
+// ── Stuur request naar server ─────────────────────────────────
+// TradingView stuurt requests alleen op barstate.islast
+var string trend_4h = "neutral"
+var string trend_1h = "neutral"
+
+if barstate.islast
+    // 4H request
+    json_4h = build_json("240", candle_count, syminfo.tickerid, "240")
+    response_4h = request.send_http(server_url + "/trend", method="POST", headers='{"Content-Type":"application/json"}', body=json_4h)
+    if not na(response_4h)
+        // Parse trend uit response: {"trend":"up"} of {"trend":"down"}
+        if str.contains(response_4h, '"up"')
+            trend_4h := "up"
+        else if str.contains(response_4h, '"down"')
+            trend_4h := "down"
+        else
+            trend_4h := "neutral"
+
+    // 1H request
+    json_1h = build_json("60", candle_count, syminfo.tickerid, "60")
+    response_1h = request.send_http(server_url + "/trend", method="POST", headers='{"Content-Type":"application/json"}', body=json_1h)
+    if not na(response_1h)
+        if str.contains(response_1h, '"up"')
+            trend_1h := "up"
+        else if str.contains(response_1h, '"down"')
+            trend_1h := "down"
+        else
+            trend_1h := "neutral"
+
+// ── Dashboard ─────────────────────────────────────────────────
+trend_label(t) => t == "up" ? "▲ Uptrend" : t == "down" ? "▼ Downtrend" : "— Neutraal"
+trend_color(t) => t == "up" ? color.new(color.teal, 10) : t == "down" ? color.new(color.red, 10) : color.new(color.gray, 50)
+
+var table dash = table.new(position.top_right, 2, 3, border_width=1, border_color=color.new(color.gray, 50), frame_width=1, frame_color=color.new(color.gray, 30))
+
+if barstate.islast
+    table.cell(dash, 0, 0, "TF",    text_color=color.gray, bgcolor=color.new(color.gray, 75), text_size=size.small)
+    table.cell(dash, 1, 0, "Trend", text_color=color.gray, bgcolor=color.new(color.gray, 75), text_size=size.small)
+    table.cell(dash, 0, 1, "4H", text_color=color.white, bgcolor=color.new(color.gray, 55), text_size=size.normal)
+    table.cell(dash, 1, 1, trend_label(trend_4h), text_color=color.white, bgcolor=trend_color(trend_4h), text_size=size.normal)
+    table.cell(dash, 0, 2, "1H", text_color=color.white, bgcolor=color.new(color.gray, 55), text_size=size.normal)
+    table.cell(dash, 1, 2, trend_label(trend_1h), text_color=color.white, bgcolor=trend_color(trend_1h), text_size=size.normal)
